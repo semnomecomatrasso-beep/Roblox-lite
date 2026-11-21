@@ -4,9 +4,6 @@ on:
   workflow_dispatch:
   push:
     branches: [main, master]
-    paths:
-      - 'Roblox-Lite-Projeto.zip'
-      - '.github/workflows/build.yml'
 
 permissions:
   contents: write
@@ -15,33 +12,50 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Baixar arquivos do repositório
+      - name: Baixar repositório
         uses: actions/checkout@v4
 
-      - name: Extrair o projeto ZIP
+      - name: Encontrar ou extrair o projeto
         shell: bash
         run: |
           set -euo pipefail
-          ZIP_FILE="$(find . -maxdepth 3 -type f -iname 'Roblox-Lite-Projeto.zip' -print -quit)"
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERRO: Roblox-Lite-Projeto.zip não encontrado. Envie o ZIP para a raiz do repositório."
-            exit 1
-          fi
-          mkdir -p extracted-project
-          unzip -q "$ZIP_FILE" -d extracted-project
-          PROJECT_DIR="$(find extracted-project -name settings.gradle.kts -printf '%h\\n' | head -n 1)"
+
+          # Primeiro tenta usar os arquivos do projeto já extraídos no repositório.
+          PROJECT_DIR="$(find . -type f -name settings.gradle.kts -not -path './.git/*' -printf '%h\n' | head -n 1 || true)"
+
+          # Se não encontrar, extrai o primeiro ZIP disponível, qualquer que seja o nome/local.
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERRO: não encontrei settings.gradle.kts dentro do ZIP."
+            ZIP_FILE="$(find . -type f -iname '*.zip' -not -path './.git/*' -print -quit || true)"
+            if [ -z "$ZIP_FILE" ]; then
+              echo "::error::Nenhum projeto Gradle ou arquivo ZIP foi encontrado no repositório."
+              echo "Envie o ZIP para o GitHub ou envie os arquivos extraídos (settings.gradle.kts e app/)."
+              exit 1
+            fi
+            echo "Extraindo: $ZIP_FILE"
+            mkdir -p _extraido
+            unzip -oq "$ZIP_FILE" -d _extraido
+            PROJECT_DIR="$(find _extraido -type f -name settings.gradle.kts -printf '%h\n' | head -n 1 || true)"
+          fi
+
+          if [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
+            echo "::error::Projeto Android inválido: faltou settings.gradle.kts ou app/build.gradle.kts."
             exit 1
           fi
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
           echo "Projeto encontrado em: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Configurar Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+
+      - name: Configurar Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Instalar SDK Android 35
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: Configurar Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -53,10 +67,13 @@ jobs:
 
       - name: Preparar APK
         run: |
+          set -euo pipefail
+          APK="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK"
           mkdir -p output
-          cp "$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk" output/Roblox-Lite-1.0.apk
+          cp "$APK" output/Roblox-Lite-1.0.apk
 
-      - name: Disponibilizar APK para download
+      - name: Disponibilizar APK em Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Roblox-Lite-APK
